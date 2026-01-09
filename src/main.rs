@@ -36,7 +36,7 @@ fn main() {
         return;
     }
 
-    // generate hash for each file and insert into the struct
+    // generates hash for each file and insert into the struct
     let files_with_hash = calculate_hash(files);
 
     let duplicates = fetch_duplicate(files_with_hash);
