@@ -1,7 +1,7 @@
 use clap::Parser;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
-use std::fs;
+use std::fs::{self, Metadata};
 use std::io::{BufReader, ErrorKind, Read};
 use std::path::PathBuf;
 
@@ -55,19 +55,21 @@ fn file_fetcher(path: &PathBuf) -> Vec<FileData> {
 
     for file in files_iterator {
         match file {
-            Ok(entry) => {
-                let metadata = entry.metadata().unwrap();
+            Ok(entry) => match entry.metadata() {
+                Ok(metadata) => {
+                    if metadata.is_file() {
+                        let file_data = FileData {
+                            path: entry.path().to_path_buf(),
+                            size: metadata.len(),
+                            hash: None,
+                        };
 
-                if metadata.is_file() {
-                    let file_data = FileData {
-                        path: entry.path().to_path_buf(),
-                        size: metadata.len(),
-                        hash: None,
-                    };
-
-                    file_list.push(file_data);
+                        file_list.push(file_data);
+                    }
                 }
-            }
+
+                Err(e) => eprint!("Error getting file's metadata {}: {}", entry.path().display(), e),
+            },
 
             Err(e) => {
                 eprintln!("Error reading file: {}", e);
@@ -81,13 +83,13 @@ fn file_fetcher(path: &PathBuf) -> Vec<FileData> {
 fn calculate_hash(file_list: Vec<FileData>) -> Vec<FileData> {
     let iterator = file_list
         .into_iter()
-        .map(|mut filedata| {
-            let file = fs::File::open(&filedata.path).unwrap();
+        .filter_map(|mut filedata| {
+            let file = fs::File::open(&filedata.path).ok()?;
             let mut reader = BufReader::new(file);
             let mut buffer = [0u8; 8192];
             let mut hasher = Sha256::new();
             loop {
-                let bytes_read = reader.read(&mut buffer).unwrap();
+                let bytes_read = reader.read(&mut buffer).ok()?;
                 if bytes_read == 0 {
                     break;
                 }
@@ -95,7 +97,7 @@ fn calculate_hash(file_list: Vec<FileData>) -> Vec<FileData> {
             }
             filedata.hash = Some(hasher.finalize().into());
 
-            filedata
+            Some(filedata)
         })
         .collect();
 
@@ -127,7 +129,6 @@ fn fetch_duplicate(file_list: Vec<FileData>) -> Vec<Vec<FileData>> {
 }
 
 fn delete_duplicates(duplicates: &Vec<Vec<FileData>>) {
-
     let mut attempted = 0;
     let mut total_deleted = 0;
     let mut saved_space: u64 = 0;
@@ -135,12 +136,14 @@ fn delete_duplicates(duplicates: &Vec<Vec<FileData>>) {
         for file in duplicate.iter().skip(1) {
             attempted += 1;
             total_deleted += 1;
-            saved_space+= file.size;
+            saved_space += file.size;
             if let Err(e) = fs::remove_file(&file.path) {
-                total_deleted -=1;
-                saved_space-= file.size;
+                total_deleted -= 1;
+                saved_space -= file.size;
                 match e.kind() {
-                    ErrorKind::NotFound => println!("File already deleted, {}", file.path.display()),
+                    ErrorKind::NotFound => {
+                        println!("File already deleted, {}", file.path.display())
+                    }
 
                     ErrorKind::PermissionDenied => {
                         println!("Need Elevated Permission , {}", file.path.display())
@@ -151,8 +154,8 @@ fn delete_duplicates(duplicates: &Vec<Vec<FileData>>) {
             }
         }
     }
-    println!("Total files attempted for deletion: {}", attempted );
-    println!("Total files deleted: {}" , total_deleted);
+    println!("Total files attempted for deletion: {}", attempted);
+    println!("Total files deleted: {}", total_deleted);
     println!("Total space saved:{}", readable_size(saved_space));
 }
 
@@ -162,30 +165,29 @@ fn print_duplicates(duplicates: &Vec<Vec<FileData>>) {
         println!("Duplicate group:");
         for file in duplicate_group {
             println!(" -> {}", file.path.display());
-          size+= file.size;
+            size += file.size;
         }
         size -= duplicate_group[0].size;
         println!("{} can be saved", readable_size(size));
-        println!("Each file is of {}" , readable_size(duplicate_group[0].size));
+        println!("Each file is of {}", readable_size(duplicate_group[0].size));
         println!();
     }
 }
 
-fn readable_size(bytes: u64) -> String{
- const KB:u64 = 1024;
- const MB:u64 = KB*1024;
- const GB:u64 = MB*1024;
+fn readable_size(bytes: u64) -> String {
+    const KB: u64 = 1024;
+    const MB: u64 = KB * 1024;
+    const GB: u64 = MB * 1024;
 
- if bytes >= GB {
-    format!("{:.}GB", bytes as f64/ GB as f64)
- }else if bytes >= MB {
-    format!("{:.}MB", bytes as f64/MB as f64)
- }else if bytes >= KB {
-    format!("{:.}KB", bytes as f64/KB as f64)
- }else {
-    format!("{}", bytes)
- }
-
+    if bytes >= GB {
+        format!("{:.}GB", bytes as f64 / GB as f64)
+    } else if bytes >= MB {
+        format!("{:.}MB", bytes as f64 / MB as f64)
+    } else if bytes >= KB {
+        format!("{:.}KB", bytes as f64 / KB as f64)
+    } else {
+        format!("{}", bytes)
+    }
 }
 
 #[cfg(test)]
